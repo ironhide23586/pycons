@@ -203,18 +203,17 @@ class Build3D:
         self.num_images = len(mask_fpaths)
         self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
-    def find_cube_side(self):
-        tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in [1, 2]])
+    def find_cube_side(self, cam_idx=[1, 2]):
+        tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
         top_bottom_xyzs = []
-        # top_bottom_enus = []
         errs = []
-        for i in range(tracking_points_all.shape[1]):
-            xyz, enu, err = self.extract_3d_points(tracking_points_all[:, i], [self.views[j].cam for j in [1, 2]])
+        for i in range(tracking_points_all.shape[1]):  # TODO: verify ttacking_points
+            xyz, enu, err = self.extract_3d_points(tracking_points_all[:, i], [self.views[j].cam for j in cam_idx])
             top_bottom_xyzs.append(xyz)
-            # top_bottom_enus.append(enu)
             errs.append(err)
-        side_len = np.linalg.norm(np.subtract(top_bottom_xyzs[0], top_bottom_xyzs[1]))
-        return side_len
+        top_bottom_xyzs = np.array(top_bottom_xyzs)
+        side_len = np.linalg.norm(top_bottom_xyzs[0] - top_bottom_xyzs[1])
+        return side_len, top_bottom_xyzs
 
     def vec2zeromat(self, xy):
         x, y = xy
@@ -245,5 +244,8 @@ if __name__ == '__main__':
     pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
 
     build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
-    cube_side = build3d.find_cube_side()
+    # cube_side, top_bottom_xyzs = build3d.find_cube_side([1, 2])
+    # print('Cube side is', cube_side)
+
+    cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
     print('Cube side is', cube_side)
