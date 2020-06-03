@@ -92,19 +92,26 @@ class Camera:
         cam_plane_chosen_filt = cam_xyzs[:, 2] > 0
         cam_xyzs = cam_xyzs[cam_plane_chosen_filt]  # choosing points in front of camera plane
         im_uvs = self.camera_xyz_to_image_xy(cam_xyzs, cam_intrinsic_calibration_matrix)
-        return im_uvs, cam_plane_chosen_filt
+        return im_uvs, world_enus_in[cam_plane_chosen_filt], cam_plane_chosen_filt
 
-    def imcoords_to_xyzs(self, im_uvs_pixels):
-        im_uvs_meters = im_uvs_pixels * [self.ssx, self.ssy]
-        x_meters = im_uvs_meters[:, 0] + (self.im_w / 2) * self.ssx
-        y_meters = (self.im_h / 2) * self.ssy - im_uvs_meters[:, 1]
+    # def imcoords_to_xyzs(self, im_uvs_pixels):
+    #     im_uvs_meters = im_uvs_pixels * [self.ssx, self.ssy]
+    #     x_meters = im_uvs_meters[:, 0] + (self.im_w / 2) * self.ssx
+    #     y_meters = (self.im_h / 2) * self.ssy - im_uvs_meters[:, 1]
 
     def viz_points(self, world_enus_in):
-        xys, chosen_points_filt = self.project_enus_to_imcoords(world_enus_in, self.RT, self.K)
+        xys, chosen_world_enus, chosen_points_filt = self.project_enus_to_imcoords(world_enus_in, self.RT, self.K)
         xs, ys = xys.T
         im = np.zeros([self.im_h, self.im_w]).astype(np.uint8)
         f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
-        im[ys[f], xs[f]] = 255
+        xs = xs[f]
+        ys = ys[f]
+        enus = chosen_world_enus[f]
+        im[ys, xs] = 255
+        for i in range(enus.shape[0]):
+            cv2.putText(im, ','.join(list(map(str, enus[i]))), (int(xs[i]), int(ys[i])), cv2.FONT_HERSHEY_SIMPLEX,
+                        .5, 200, thickness=1)
+
         return im, chosen_points_filt
 
     def viz_plane(self, side=100, plane_idx=0, plane_loc=0):
@@ -165,25 +172,32 @@ class View:
         self.loc_enu = np.array([x, z, -y])
         self.cam = Camera(self.loc_enu, self.cam_quaternion, self.im_w, self.im_h)
 
+    # def get_keypoints(self):
+    #
+
 
 if __name__ == '__main__':
-    im_fpaths = glob(IMAGE_DIR + os.sep + '*')
-    ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
-    id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
-    mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
-    pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
-    num_images = len(mask_fpaths)
+    # im_fpaths = glob(IMAGE_DIR + os.sep + '*')
+    # ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
+    # id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
+    # mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
+    # pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
+    # num_images = len(mask_fpaths)
+    #
+    # views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(num_images)]
+    #
+    # for k in range(num_images):
+    #     for i in range(3):
+    #         p = views[k].cam.viz_plane(50, i, 3)
+    #         views[i].loc_xyz
+    #         cv2.imwrite('misc/' + str(k) + '-' + str(i) + '.png', p)
 
-    views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(num_images)]
+    cam0 = Camera([5, 0, 5], [1, 0, 0, 0], 2560, 1440)
+    im0 = cam0.viz_plane(10, 1, 10)
+    cv2.imwrite('im0.png', im0)
 
-    for k in range(num_images):
-        for i in range(3):
-            p = views[k].cam.viz_plane(50, i, 3)
-            views[i].loc_xyz
-            cv2.imwrite('misc/' + str(k) + '-' + str(i) + '.png', p)
-
-    cam = Camera([0, 0, -14], [1, 0, 0, 0], 256, 144)
-    im = cam.viz_plane(100, 2, -15)
-    cv2.imwrite('im.png', im)
+    cam1 = Camera([0, 0, 0], [1, 0, 0, 0], 2560, 1440)
+    im1 = cam1.viz_plane(10, 1, 10)
+    cv2.imwrite('im1.png', im1)
 
     k = 0
