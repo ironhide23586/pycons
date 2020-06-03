@@ -54,9 +54,9 @@ class Camera:
 
     def get_cam_rot_trans_matrix(self, cam_world_loc_xyz, cam_quaternion):
         a, b, c, d = cam_quaternion
-        rotation_matrix = np.array([[2 * a ** 2 - 1 + 2 * b ** 2, 2 * b * c + 2 * a * d, 2 * b * d - 2 * a * c],
-                                    [2 * b * c - 2 * a * d, 2 * a ** 2 - 1 + 2 * c ** 2, 2 * c * d + 2 * a * b],
-                                    [2 * b * d + 2 * a * c, 2 * c * d - 2 * a * b, 2 * a ** 2 - 1 + 2 * d ** 2]])
+        rotation_matrix = np.array([[2 * a ** 2 - 1 + 2 * b ** 2,       2 * b * c + 2 * a * d,        2 * b * d - 2 * a * c],
+                                    [2 * b * c - 2 * a * d,       2 * a ** 2 - 1 + 2 * c ** 2,        2 * c * d + 2 * a * b],
+                                    [2 * b * d + 2 * a * c,             2 * c * d - 2 * a * b,  2 * a ** 2 - 1 + 2 * d ** 2]])
         x, y, z = cam_world_loc_xyz
         translation_vector = np.array([-x, -y, -z])
         rotation_translation_matrix = np.eye(4)[:3]
@@ -142,9 +142,14 @@ class View:
         self.im = None
         self.mask = None
         self.pose = None
-        self.m_plane_bgr = [241, 104, 146]
-        self.m_cube_bgr = [248, 71, 170]
-        self.m_sky_bgr = [73, 226, 210]
+        self.m_plane_bgr = np.array([241, 104, 146])
+        self.m_cube_bgr = np.array([248, 71, 170])
+        self.m_sky_bgr = np.array([73, 226, 210])
+        self.cube_face_bgrs = np.array([[13, 125, 201],
+                                        [165, 0, 69],
+                                        [153, 0, 0],
+                                        [0, 127, 104],
+                                        [42, 46, 242]])
         self.cam = None
         self.im_h = 0
         self.im_w = 0
@@ -176,6 +181,21 @@ class View:
         self.loc_enu = np.array([x, z, -y])
         self.cam = Camera(self.loc_enu, self.cam_quaternion, self.im_w, self.im_h)
 
+    def find_right_top_bottom_tracking_points(self):
+        m = np.abs(self.mask.astype(np.float) - self.m_cube_bgr.astype(np.float)).max(axis=-1)
+        m[m == 0] = -1
+        m[m > -1] = 0
+        m[m == -1] = 255
+        m = m.astype(np.uint8)
+        polys, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        xys = np.squeeze(polys[0])
+        xs = xys[:, 0]
+        right_border_xys = xys[xs >= xs.max() - 3]
+        top_xy = right_border_xys[right_border_xys[:, 1].argmin()]
+        bottom_xy = right_border_xys[right_border_xys[:, 1].argmax()]
+        cv2.imwrite('m.png', m)
+        return top_xy, bottom_xy
+
 
 class Build3D:
 
@@ -183,44 +203,18 @@ class Build3D:
         self.num_images = len(mask_fpaths)
         self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
-    def find_keypoints(self):
-        orb = cv2.ORB_create()
-        
-        kps = []
-        descs = []
-        for view in self.views:
-            kp, desc = orb.detectAndCompute(view.im, None)
-            kps.append(kp)
-            descs.append(desc)
-
-        # FLANN_INDEX_KDTREE = 0
-        # index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-        # search_params = dict(checks=50)  # or pass empty dictionary
-        # flann = cv2.FlannBasedMatcher(index_params, search_params)
-        flann = cv2.FlannBasedMatcher()
-
-        for j in range(1, self.num_images):
-            matches = flann.knnMatch(descs[j - 1].astype(np.float32), descs[j].astype(np.float32), k=2)
-            # # Need to draw only good matches, so create a mask
-            matchesMask = [[0, 0] for i in range(len(matches))]
-            # ratio test as per Lowe's paper
-            for i, (m, n) in enumerate(matches):
-                if m.distance < 0.9 * n.distance:
-                    matchesMask[i] = [1, 0]
-            draw_params = dict(matchColor=(0, 255, 0),
-                               singlePointColor=(255, 0, 0),
-                               matchesMask=matchesMask,
-                               flags=0)
-            im_matches = cv2.drawMatchesKnn(self.views[j - 1].im, kps[j - 1], self.views[j].im, kps[j], matches,
-                                            None, **draw_params)
-            cv2.imwrite('m.png', im_matches)
-            k = 0
-
-        k = 0
-
-
-    def build(self):
-        self.find_keypoints()
+    def find_cube_side(self):
+        tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in [1, 2]])
+        top_bottom_xyzs = []
+        # top_bottom_enus = []
+        errs = []
+        for i in range(tracking_points_all.shape[1]):
+            xyz, enu, err = self.extract_3d_points(tracking_points_all[:, i], [self.views[j].cam for j in [1, 2]])
+            top_bottom_xyzs.append(xyz)
+            # top_bottom_enus.append(enu)
+            errs.append(err)
+        side_len = np.linalg.norm(np.subtract(top_bottom_xyzs[0], top_bottom_xyzs[1]))
+        return side_len
 
     def vec2zeromat(self, xy):
         x, y = xy
@@ -244,11 +238,12 @@ class Build3D:
 
 
 if __name__ == '__main__':
-    im_fpaths = glob(IMAGE_DIR + os.sep + '*')
+    im_fpaths = np.array(glob(IMAGE_DIR + os.sep + '*'))
     ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
     id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
     mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
     pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
 
     build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
-    build3d.build()
+    cube_side = build3d.find_cube_side()
+    print('Cube side is', cube_side)
