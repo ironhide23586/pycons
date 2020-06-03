@@ -114,7 +114,7 @@ class Camera:
         im[ys, xs] = 255
         for i in range(enus.shape[0]):
             cv2.putText(im, ','.join(list(map(str, enus[i]))), (int(xs[i]), int(ys[i])), cv2.FONT_HERSHEY_SIMPLEX,
-                        .5, 200, thickness=1)
+                        .6, 200, thickness=1)
 
         return im, chosen_points_filt
 
@@ -176,8 +176,27 @@ class View:
         self.loc_enu = np.array([x, z, -y])
         self.cam = Camera(self.loc_enu, self.cam_quaternion, self.im_w, self.im_h)
 
-    # def get_keypoints(self):
-    #
+
+def vec2zeromat(xy):
+    x, y = xy
+    return np.array([[0, -1,  y],
+                     [1,  0, -x],
+                     [-y, x,  0]])
+
+
+def extract_3d_points(tracked_im_xys, cams):
+    num_views = len(cams)
+    im_xy_zero_mats = np.array([vec2zeromat(xy) for xy in tracked_im_xys])
+    a = np.vstack([np.dot(im_xy_zero_mats[i], cams[i].projection_matrix) for i in range(num_views)])
+    w, v = np.linalg.eig(np.dot(a.T, a))
+    idx = w.argmin()
+    match_error = w[idx]  # lower the eigenvalue, better the match
+    pred = v[idx]
+    c0, c1, c2 = pred[:3] / pred[3]
+    x, y, z = c2, c1, -c0
+    enu = [x, z, -y]
+    xyz = [x, y, z]
+    return xyz, enu, match_error
 
 
 if __name__ == '__main__':
@@ -204,4 +223,10 @@ if __name__ == '__main__':
     im1 = cam1.viz_plane(10, 1, 10)
     cv2.imwrite('im1.png', im1)
 
+    tracked_enu = 0, 10, 0  # result has to be close to this
+    ux0, uy0 = 640, 1360  # tracked points
+    ux1, uy1 = 1280, 720  # tracked points
+
+    pnts = np.array([[ux0, uy0], [ux1, uy1]])
+    xyzs, enus, sc = extract_3d_points(pnts, [cam0, cam1])
     k = 0
