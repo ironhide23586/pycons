@@ -177,26 +177,70 @@ class View:
         self.cam = Camera(self.loc_enu, self.cam_quaternion, self.im_w, self.im_h)
 
 
-def vec2zeromat(xy):
-    x, y = xy
-    return np.array([[0, -1,  y],
-                     [1,  0, -x],
-                     [-y, x,  0]])
+class Build3D:
+
+    def __init__(self, im_fpaths, mask_fpaths, pose_fpaths):
+        self.num_images = len(mask_fpaths)
+        self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
+
+    def find_keypoints(self):
+        orb = cv2.ORB_create()
+        
+        kps = []
+        descs = []
+        for view in self.views:
+            kp, desc = orb.detectAndCompute(view.im, None)
+            kps.append(kp)
+            descs.append(desc)
+
+        # FLANN_INDEX_KDTREE = 0
+        # index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        # search_params = dict(checks=50)  # or pass empty dictionary
+        # flann = cv2.FlannBasedMatcher(index_params, search_params)
+        flann = cv2.FlannBasedMatcher()
+
+        for j in range(1, self.num_images):
+            matches = flann.knnMatch(descs[j - 1].astype(np.float32), descs[j].astype(np.float32), k=2)
+            # # Need to draw only good matches, so create a mask
+            matchesMask = [[0, 0] for i in range(len(matches))]
+            # ratio test as per Lowe's paper
+            for i, (m, n) in enumerate(matches):
+                if m.distance < 0.9 * n.distance:
+                    matchesMask[i] = [1, 0]
+            draw_params = dict(matchColor=(0, 255, 0),
+                               singlePointColor=(255, 0, 0),
+                               matchesMask=matchesMask,
+                               flags=0)
+            im_matches = cv2.drawMatchesKnn(self.views[j - 1].im, kps[j - 1], self.views[j].im, kps[j], matches,
+                                            None, **draw_params)
+            cv2.imwrite('m.png', im_matches)
+            k = 0
+
+        k = 0
 
 
-def extract_3d_points(tracked_im_xys, cams):
-    num_views = len(cams)
-    im_xy_zero_mats = np.array([vec2zeromat(xy) for xy in tracked_im_xys])
-    a = np.vstack([np.dot(im_xy_zero_mats[i], cams[i].projection_matrix) for i in range(num_views)])
-    w, v = np.linalg.eig(np.dot(a.T, a))
-    idx = w.argmin()
-    match_error = w[idx]  # lower the eigenvalue, better the match
-    pred = v[idx]
-    c0, c1, c2 = pred[:3] / pred[3]
-    x, y, z = c2, c1, -c0
-    enu = [x, z, -y]
-    xyz = [x, y, z]
-    return xyz, enu, match_error
+    def build(self):
+        self.find_keypoints()
+
+    def vec2zeromat(self, xy):
+        x, y = xy
+        return np.array([[0, -1,  y],
+                         [1,  0, -x],
+                         [-y, x,  0]])
+
+    def extract_3d_points(self, tracked_im_xys, cams):
+        num_views = len(cams)
+        im_xy_zero_mats = np.array([self.vec2zeromat(xy) for xy in tracked_im_xys])
+        a = np.vstack([np.dot(im_xy_zero_mats[i], cams[i].projection_matrix) for i in range(num_views)])
+        w, v = np.linalg.eig(np.dot(a.T, a))
+        idx = w.argmin()
+        match_error = w[idx]  # lower the eigenvalue, better the match
+        pred = v[idx]
+        c0, c1, c2 = pred[:3] / pred[3]
+        x, y, z = c2, c1, -c0
+        enu = [x, z, -y]
+        xyz = [x, y, z]
+        return xyz, enu, match_error
 
 
 if __name__ == '__main__':
@@ -205,28 +249,6 @@ if __name__ == '__main__':
     id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
     mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
     pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
-    num_images = len(mask_fpaths)
 
-    views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(num_images)]
-
-    # for k in range(num_images):
-    #     for i in range(3):
-    #         p = views[k].cam.viz_plane(50, i, 3)
-    #         views[i].loc_xyz
-    #         cv2.imwrite('misc/' + str(k) + '-' + str(i) + '.png', p)
-
-    cam0 = Camera([5, 0, 5], [1, 0, 0, 0], 2560, 1440)
-    im0 = cam0.viz_plane(10, 1, 10)
-    cv2.imwrite('im0.png', im0)
-
-    cam1 = Camera([0, 0, 0], [1, 0, 0, 0], 2560, 1440)
-    im1 = cam1.viz_plane(10, 1, 10)
-    cv2.imwrite('im1.png', im1)
-
-    tracked_enu = 0, 10, 0  # result has to be close to this
-    ux0, uy0 = 640, 1360  # tracked points
-    ux1, uy1 = 1280, 720  # tracked points
-
-    pnts = np.array([[ux0, uy0], [ux1, uy1]])
-    xyzs, enus, sc = extract_3d_points(pnts, [cam0, cam1])
-    k = 0
+    build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
+    build3d.build()
