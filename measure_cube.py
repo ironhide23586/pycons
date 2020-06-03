@@ -40,6 +40,7 @@ class Camera:
         self.im_h = im_h
         self.hor_fov_deg = hor_fov_deg
         self.K = self.get_camera_calibration_matrix(self.im_w, self.im_h, self.hor_fov_deg)
+        self.projection_matrix = np.dot(self.K, self.RT)
 
     def get_camera_calibration_matrix(self, im_w, im_h, hor_fov_deg):
         f = 1
@@ -70,37 +71,40 @@ class Camera:
         self.cam_quaternion = cam_quaternion
         self.RT, self.R, self.T = self.get_cam_rot_trans_matrix(self.cam_world_loc_xyz, self.cam_quaternion)
 
+    def enu2xyz(self, enus):
+        es, ns, us = enus.T
+        xyzs = np.vstack([es, -us, ns]).T
+        return xyzs
+
     def world_to_camera_xyzs(self, world_xyzs_in, cam_extrinsic_matrix):
         world_xyzs = np.ones([world_xyzs_in.shape[0], 4])
         world_xyzs[:, :3] = world_xyzs_in
         cam_coords_xyz = np.dot(cam_extrinsic_matrix, world_xyzs.T).T
         return cam_coords_xyz
 
-    def enu2xyz(self, enus):
-        es, ns, us = enus.T
-        xyzs = np.vstack([es, -us, ns]).T
-        return xyzs
-
     def camera_xyz_to_image_xy(self, cam_xyzs, cam_intrinsic_calibration_matrix):
         im_uvs = np.dot(cam_intrinsic_calibration_matrix, cam_xyzs.T).T
         im_uvs = (im_uvs[:, :2] / im_uvs[:, [2, 2]]).astype(np.int)
         return im_uvs
 
-    def project_enus_to_imcoords(self, world_enus_in, cam_extrinsic_matrix, cam_intrinsic_calibration_matrix):
+    def project_enus_to_imcoords(self, world_enus_in, cam_extrinsic_matrix=None):
         world_xyzs_in = self.enu2xyz(world_enus_in)
-        cam_xyzs = self.world_to_camera_xyzs(world_xyzs_in, cam_extrinsic_matrix)
-        cam_plane_chosen_filt = cam_xyzs[:, 2] > 0
-        cam_xyzs = cam_xyzs[cam_plane_chosen_filt]  # choosing points in front of camera plane
-        im_uvs = self.camera_xyz_to_image_xy(cam_xyzs, cam_intrinsic_calibration_matrix)
+        world_enus = world_enus_in
+        if cam_extrinsic_matrix is not None:
+            cam_xyzs = self.world_to_camera_xyzs(world_xyzs_in, cam_extrinsic_matrix)
+            cam_plane_chosen_filt = cam_xyzs[:, 2] > 0
+            world_xyzs_in = world_xyzs_in[cam_plane_chosen_filt]
+            world_enus = world_enus_in[cam_plane_chosen_filt]
+
+        world_xyzs = np.ones([world_enus.shape[0], 4])
+        world_xyzs[:, :3] = world_xyzs_in
+
+        im_uvs = np.dot(self.projection_matrix, world_xyzs.T).T
+        im_uvs = (im_uvs[:, :2] / im_uvs[:, [2, 2]]).astype(np.int)
         return im_uvs, world_enus_in[cam_plane_chosen_filt], cam_plane_chosen_filt
 
-    # def imcoords_to_xyzs(self, im_uvs_pixels):
-    #     im_uvs_meters = im_uvs_pixels * [self.ssx, self.ssy]
-    #     x_meters = im_uvs_meters[:, 0] + (self.im_w / 2) * self.ssx
-    #     y_meters = (self.im_h / 2) * self.ssy - im_uvs_meters[:, 1]
-
     def viz_points(self, world_enus_in):
-        xys, chosen_world_enus, chosen_points_filt = self.project_enus_to_imcoords(world_enus_in, self.RT, self.K)
+        xys, chosen_world_enus, chosen_points_filt = self.project_enus_to_imcoords(world_enus_in, self.RT)
         xs, ys = xys.T
         im = np.zeros([self.im_h, self.im_w]).astype(np.uint8)
         f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
@@ -177,15 +181,15 @@ class View:
 
 
 if __name__ == '__main__':
-    # im_fpaths = glob(IMAGE_DIR + os.sep + '*')
-    # ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
-    # id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
-    # mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
-    # pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
-    # num_images = len(mask_fpaths)
-    #
-    # views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(num_images)]
-    #
+    im_fpaths = glob(IMAGE_DIR + os.sep + '*')
+    ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
+    id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
+    mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
+    pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
+    num_images = len(mask_fpaths)
+
+    views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(num_images)]
+
     # for k in range(num_images):
     #     for i in range(3):
     #         p = views[k].cam.viz_plane(50, i, 3)
