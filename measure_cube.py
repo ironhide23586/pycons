@@ -28,7 +28,7 @@ POSE_DIR = ROOT_DIR + os.sep + 'Pose'
 
 class Camera:
 
-    def __init__(self, cam_world_loc_enu, cam_quaternion, im_w, im_h, hor_fov_deg=90):
+    def __init__(self, cam_world_loc_enu, im_w, im_h, cam_quaternion=[1, 0, 0, 0], hor_fov_deg=90):
         self.R = None
         self.T = None
         self.RT = None
@@ -90,6 +90,7 @@ class Camera:
     def project_enus_to_imcoords(self, world_enus_in, cam_extrinsic_matrix=None):
         world_xyzs_in = self.enu2xyz(world_enus_in)
         world_enus = world_enus_in
+        cam_plane_chosen_filt = np.ones(world_enus.shape[0]).astype(np.bool)
         if cam_extrinsic_matrix is not None:
             cam_xyzs = self.world_to_camera_xyzs(world_xyzs_in, cam_extrinsic_matrix)
             cam_plane_chosen_filt = cam_xyzs[:, 2] > 0
@@ -101,6 +102,13 @@ class Camera:
 
         im_uvs = np.dot(self.projection_matrix, world_xyzs.T).T
         im_uvs = (im_uvs[:, :2] / im_uvs[:, [2, 2]]).astype(np.int)
+
+        l0 = np.dot(vec2zeromat(im_uvs[0]), np.dot(self.projection_matrix, world_xyzs.T)).T
+        l0 = l0[:, :2] / l0[:, [2, 2]]
+
+        l1 = np.dot(np.dot(vec2zeromat(im_uvs[0]), self.projection_matrix), world_xyzs.T).T
+        l1 = l1[:, :2] / l1[:, [2, 2]]
+
         return im_uvs, world_enus_in[cam_plane_chosen_filt], cam_plane_chosen_filt
 
     def viz_points(self, world_enus_in):
@@ -114,7 +122,7 @@ class Camera:
         im[ys, xs] = 255
         for i in range(enus.shape[0]):
             cv2.putText(im, ','.join(list(map(str, enus[i]))), (int(xs[i]), int(ys[i])), cv2.FONT_HERSHEY_SIMPLEX,
-                        .6, 200, thickness=1)
+                        .4, 200, thickness=1)
 
         return im, chosen_points_filt
 
@@ -179,7 +187,7 @@ class View:
                 self.cam_quaternion = np.array(quaternion)
         x, y, z = self.loc_xyz
         self.loc_enu = np.array([x, z, -y])
-        self.cam = Camera(self.loc_enu, self.cam_quaternion, self.im_w, self.im_h)
+        self.cam = Camera(self.loc_enu, self.im_w, self.im_h, cam_quaternion=self.cam_quaternion)
 
     def find_right_top_bottom_tracking_points(self):
         m = np.abs(self.mask.astype(np.float) - self.m_cube_bgr.astype(np.float)).max(axis=-1)
@@ -199,15 +207,16 @@ class View:
 
 class Build3D:
 
-    def __init__(self, im_fpaths, mask_fpaths, pose_fpaths):
-        self.num_images = len(mask_fpaths)
-        self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
+    def __init__(self, im_fpaths=None, mask_fpaths=None, pose_fpaths=None):
+        if im_fpaths is not None and mask_fpaths is not None and pose_fpaths is not None:
+            self.num_images = len(mask_fpaths)
+            self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
     def find_cube_side(self, cam_idx=[1, 2]):
         tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
         top_bottom_xyzs = []
         errs = []
-        for i in range(tracking_points_all.shape[1]):  # TODO: verify ttacking_points
+        for i in range(tracking_points_all.shape[1]):  # TODO: verify tracking_points
             xyz, enu, err = self.extract_3d_points(tracking_points_all[:, i], [self.views[j].cam for j in cam_idx])
             top_bottom_xyzs.append(xyz)
             errs.append(err)
@@ -215,37 +224,69 @@ class Build3D:
         side_len = np.linalg.norm(top_bottom_xyzs[0] - top_bottom_xyzs[1])
         return side_len, top_bottom_xyzs
 
-    def vec2zeromat(self, xy):
-        x, y = xy
-        return np.array([[0, -1,  y],
-                         [1,  0, -x],
-                         [-y, x,  0]])
-
-    def extract_3d_points(self, tracked_im_xys, cams):
+    def extract_3d_points(self, im_uvs, cams):
         num_views = len(cams)
-        im_xy_zero_mats = np.array([self.vec2zeromat(xy) for xy in tracked_im_xys])
+        im_xy_zero_mats = np.array([vec2zeromat(xy) for xy in im_uvs])
         a = np.vstack([np.dot(im_xy_zero_mats[i], cams[i].projection_matrix) for i in range(num_views)])
-        w, v = np.linalg.eig(np.dot(a.T, a))
-        idx = w.argmin()
-        match_error = w[idx]  # lower the eigenvalue, better the match
-        pred = v[idx]
-        c0, c1, c2 = pred[:3] / pred[3]
-        x, y, z = c2, c1, -c0
-        enu = [x, z, -y]
-        xyz = [x, y, z]
-        return xyz, enu, match_error
+        y = np.zeros(a.shape[0])
+        y[-1] = 1
+        a_inv = np.linalg.pinv(a)
+        homogenous_coords = np.dot(a_inv, y).T
+        x, y, z = homogenous_coords[:-1] / homogenous_coords[-1]
+        enu = np.array([x, z, -y])
+        xyz = np.array([x, y, z])
+        err = np.linalg.norm((np.dot(a, a_inv) - np.eye(a.shape[0])).flatten())
+        return xyz, enu, err
+
+
+def vec2zeromat(xy):
+    x, y = xy
+    return np.array([[0, -1,  y],
+                     [1,  0, -x],
+                     [-y, x,  0]])
 
 
 if __name__ == '__main__':
-    im_fpaths = np.array(glob(IMAGE_DIR + os.sep + '*'))
-    ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
-    id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
-    mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
-    pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
-
-    build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
+    # im_fpaths = np.array(glob(IMAGE_DIR + os.sep + '*'))
+    # ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
+    # id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
+    # mask_fpaths = [id2fpath(MASKS_DIR, id, '1.png') for id in ids]
+    # pose_fpaths = [id2fpath(POSE_DIR, id, '2.txt') for id in ids]
+    #
+    # build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
     # cube_side, top_bottom_xyzs = build3d.find_cube_side([1, 2])
     # print('Cube side is', cube_side)
 
-    cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
-    print('Cube side is', cube_side)
+    # cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
+    # print('Cube side is', cube_side)
+
+    targ_enu = np.array([[-10, 20, 9]])
+    # p0 = 639, 143
+    # p1 = 963, 569
+
+    # targ_enu = np.array([[-1, 20, 1]])
+    # p0 = 1216, 656
+    # p1 = 1699, 1144
+
+    w = 2560
+    h = 1440
+    build3d = Build3D()
+
+    cam0 = Camera([0, 0, 0], w, h)
+    # v0 = cam0.viz_plane(10, 1, 20)
+    # cv2.imwrite('v0.png', v0)
+    im_uvs0, world_enus_in0, cam_plane_chosen_filt0 = cam0.project_enus_to_imcoords(targ_enu)
+
+    cam1 = Camera([-2, 5, 3], w, h, [1, 0.08, -0.1, 0.04])
+    # v1 = cam1.viz_plane(10, 1, 20)
+    # cv2.imwrite('v1.png', v1)
+    im_uvs1, world_enus_in1, cam_plane_chosen_filt1 = cam1.project_enus_to_imcoords(targ_enu)
+
+    # tracked_xys = np.array([p0, p1])
+    tracked_xys = np.vstack([im_uvs0, im_uvs1])
+
+    pred_xyz, pred_enu, match_error = build3d.extract_3d_points(tracked_xys, [cam0, cam1])
+    recons_err = np.linalg.norm(targ_enu - pred_enu)
+    print(recons_err, match_error, targ_enu, pred_enu)
+    k = 0
+
