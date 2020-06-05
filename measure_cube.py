@@ -35,12 +35,12 @@ class Camera:
         self.cam_world_loc_xyz = None
         self.cam_world_loc_enu = None
         self.cam_quaternion = None
-        self.update_cam_loc_pose(cam_world_loc_enu, cam_quaternion)
+        self.projection_matrix = None
         self.im_w = im_w
         self.im_h = im_h
         self.hor_fov_deg = hor_fov_deg
         self.K = self.get_camera_calibration_matrix(self.im_w, self.im_h, self.hor_fov_deg)
-        self.projection_matrix = np.dot(self.K, self.RT)
+        self.update_cam_loc_pose(cam_world_loc_enu, cam_quaternion)
 
     def get_camera_calibration_matrix(self, im_w, im_h, hor_fov_deg):
         f = 1
@@ -70,6 +70,7 @@ class Camera:
         self.cam_world_loc_xyz = np.array([e, -u, n])
         self.cam_quaternion = cam_quaternion
         self.RT, self.R, self.T = self.get_cam_rot_trans_matrix(self.cam_world_loc_xyz, self.cam_quaternion)
+        self.projection_matrix = np.dot(self.K, self.RT)
 
     def enu2xyz(self, enus):
         es, ns, us = enus.T
@@ -93,64 +94,70 @@ class Camera:
         cam_plane_chosen_filt = np.ones(world_enus.shape[0]).astype(np.bool)
         if cam_extrinsic_matrix is not None:
             cam_xyzs = self.world_to_camera_xyzs(world_xyzs_in, cam_extrinsic_matrix)
-            cam_plane_chosen_filt = cam_xyzs[:, 2] > 0
+            cam_plane_chosen_filt = cam_xyzs[:, 2] >= 0
             world_xyzs_in = world_xyzs_in[cam_plane_chosen_filt]
             world_enus = world_enus_in[cam_plane_chosen_filt]
         world_xyzs = np.ones([world_enus.shape[0], 4])
         world_xyzs[:, :3] = world_xyzs_in
         im_uvs = np.dot(self.projection_matrix, world_xyzs.T).T
+        zs = im_uvs[:, 2]
+        im_uvs[zs == 0, 2] = 1
         im_uvs = (im_uvs[:, :2] / im_uvs[:, [2, 2]]).astype(np.int)
         return im_uvs, world_enus_in[cam_plane_chosen_filt], cam_plane_chosen_filt
 
-    def viz_points(self, world_enus_in):
+    def viz_points(self, world_enus_in, write_coords=True):
         xys, chosen_world_enus, chosen_points_filt = self.project_enus_to_imcoords(world_enus_in, self.RT)
         xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
+        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
         xs = xs[f]
         ys = ys[f]
         chosen_world_enus = chosen_world_enus[f]
         pixels = 1 / np.linalg.norm(chosen_world_enus, axis=1)**2
         pixels = pixels - pixels.min()
         pixels = pixels / pixels.max()
-        pixels = (pixels * .9) + .1
+        pixels = (pixels * .3) + .7
         pixels = (np.tile(np.array([pixels]).T, [1, 3]) * np.array([255, 255, 255])).astype(np.uint8)
         im = np.zeros([self.im_h, self.im_w, 3]).astype(np.uint8)
         im[ys, xs] = pixels
-        steps = 1000
+        if self.im_w < 500:
+            write_coords = False
+        text_scale = .4
+        if write_coords:
+            for i in range(chosen_world_enus.shape[0]):
+                cv2.putText(im, ','.join(list(map(str, chosen_world_enus[i]))), (int(xs[i]), int(ys[i])),
+                            cv2.FONT_HERSHEY_SIMPLEX, text_scale, [123, 156, 80], thickness=1)
+        steps = 10000
         e_enus = np.zeros([steps, 3])
-        e_enus[:, 0] = np.linspace(0, 100, 1000)
+        e_enus[:, 0] = np.linspace(0, 100, steps)
         n_enus = np.zeros([steps, 3])
-        n_enus[:, 1] = np.linspace(0, 100, 1000)
+        n_enus[:, 1] = np.linspace(0, 100, steps)
         u_enus = np.zeros([steps, 3])
-        u_enus[:, 2] = np.linspace(0, 100, 1000)
+        u_enus[:, 2] = np.linspace(0, 100, steps)
 
         xys, _, _ = self.project_enus_to_imcoords(e_enus, self.RT)
         xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
+        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
         xs = xs[f]
         ys = ys[f]
         im[ys, xs] = [0, 255, 0]
 
         xys, _, _ = self.project_enus_to_imcoords(n_enus, self.RT)
         xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
+        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
         xs = xs[f]
         ys = ys[f]
         im[ys, xs] = [255, 0, 0]
 
         xys, _, _ = self.project_enus_to_imcoords(u_enus, self.RT)
         xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs > 0, xs < self.im_w), np.logical_and(ys > 0, ys < self.im_h))
+        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
         xs = xs[f]
         ys = ys[f]
         im[ys, xs] = [0, 0, 255]
 
-        # for i in range(enus.shape[0]):
-        #     cv2.putText(im, ','.join(list(map(str, enus[i]))), (int(xs[i]), int(ys[i])), cv2.FONT_HERSHEY_SIMPLEX,
-        #                 .2, 200, thickness=1)
         return im, chosen_points_filt
 
-    def viz_plane(self, side=100, plane_idx=0, plane_loc=0):
+    def viz_plane(self, side=100, plane_idx=0, plane_loc=0, write_coords=True):
         es = np.arange(-side, side)
         ns = np.arange(-side, side)
         us = np.arange(-side, side)
@@ -161,7 +168,7 @@ class Camera:
         elif plane_idx == 2:
             us = np.array([plane_loc])
         enus = np.array(list(itertools.product(es, ns, us)))
-        plane_viz, _ = self.viz_points(enus)
+        plane_viz, _ = self.viz_points(enus, write_coords=write_coords)
         return plane_viz
 
 
@@ -198,6 +205,7 @@ class View:
         return q, xyz
 
     def init(self, loc_xyz=None, quaternion=None):
+        # self.im = cv2.resize(cv2.imread(self.im_fpath), (1920, 1080))
         self.im = cv2.imread(self.im_fpath)
         self.im_h, self.im_w, _ = self.im.shape
         self.mask = cv2.imread(self.mask_fpath)
@@ -318,8 +326,34 @@ def vec2zeromat(xy):
                      [1,  0, -x],
                      [-y, x,  0]])
 
+#  up-down, pitch, yaw, roll
+def animate_plane(plane_idx=2, qidx=3, w=640, h=360, start_quaternion=[1., 0.1, 0., 0.1], start_enu=[0, 0, 0]):
+    cam = Camera(start_enu, w, h, start_quaternion)
+    qvals0 = np.linspace(-1., 1., 100)
+    qvals1 = np.linspace(1., -1., 100)
+    start_quaternion = np.array(start_quaternion)
+    while True:
+        for qval in qvals0:
+            q = start_quaternion.copy()
+            q[qidx] = qval
+            cam.update_cam_loc_pose(start_enu, q)
+            print(qval)
+            im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
+            cv2.imshow('plane_render', im)
+            cv2.waitKey(1)
+        for qval in qvals1:
+            q = start_quaternion.copy()
+            q[qidx] = qval
+            cam.update_cam_loc_pose(start_enu, q)
+            print(qval)
+            im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
+            cv2.imshow('plane_render', im)
+            cv2.waitKey(1)
+
 
 if __name__ == '__main__':
+    animate_plane()
+
     im_fpaths = np.array(glob(IMAGE_DIR + os.sep + '*'))
     ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
     id2fpath = lambda dir, id, suffix: dir + os.sep + id + '_' + suffix
@@ -332,36 +366,35 @@ if __name__ == '__main__':
     cube_side, top_bottom_xyzs = build3d.find_cube_side([1, 2])
     print('Cube side is', cube_side)
 
-    # cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
-    # print('Cube side is', cube_side)
+    cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
+    print('Cube side is', cube_side)
 
     cube_side, top_bottom_xyzs = build3d.find_cube_side([5, 9])
     print('Cube side is', cube_side)
 
 
-
     # targ_enu = np.array([[-10, 20, 9]])
-    # targ_enu = np.array([[-1, 20, 1]])
+    targ_enu = np.array([[-1, 20, 1]])
 
-    # w = 2560
-    # h = 1440
-    # build3d = Build3D()
-    #
-    # cam0 = Camera([0, 0, 0], w, h)
-    # v0 = cam0.viz_plane(10, 1, 20)
-    # cv2.imwrite('v0.png', v0)
-    # im_uvs0, world_enus_in0, cam_plane_chosen_filt0 = cam0.project_enus_to_imcoords(targ_enu)
-    #
-    # cam1 = Camera([-2, 5, 3], w, h, [1, 0.08, -0.1, 0.04])
-    # v1 = cam1.viz_plane(10, 1, 20)
-    # cv2.imwrite('v1.png', v1)
-    # im_uvs1, world_enus_in1, cam_plane_chosen_filt1 = cam1.project_enus_to_imcoords(targ_enu)
-    #
-    # # tracked_xys = np.array([p0, p1])
-    # tracked_xys = np.vstack([im_uvs0, im_uvs1])
-    #
-    # pred_xyz, pred_enu, match_error = build3d.extract_3d_points(tracked_xys, [cam0, cam1])
-    # recons_err = np.linalg.norm(targ_enu - pred_enu)
-    # print(recons_err, match_error, targ_enu, pred_enu)
-    # k = 0
+    w = 2560
+    h = 1440
+    build3d = Build3D()
+
+    cam0 = Camera([0, -1, 0], w, h, [1, 0.03, 0.01, -0.02])
+    v0 = cam0.viz_plane(10, 1, 20)
+    cv2.imwrite('v0.png', v0)
+    im_uvs0, world_enus_in0, cam_plane_chosen_filt0 = cam0.project_enus_to_imcoords(targ_enu)
+
+    cam1 = Camera([-2, 5, 3], w, h, [1, 0.08, -0.1, 0.04])
+    v1 = cam1.viz_plane(10, 1, 20)
+    cv2.imwrite('v1.png', v1)
+    im_uvs1, world_enus_in1, cam_plane_chosen_filt1 = cam1.project_enus_to_imcoords(targ_enu)
+
+    # tracked_xys = np.array([p0, p1])
+    tracked_xys = np.vstack([im_uvs0, im_uvs1])
+
+    pred_xyz, pred_enu, match_error = build3d.extract_3d_points(tracked_xys, [cam0, cam1])
+    recons_err = np.linalg.norm(targ_enu - pred_enu)
+    print(recons_err, match_error, targ_enu, pred_enu)
+    k = 0
 
