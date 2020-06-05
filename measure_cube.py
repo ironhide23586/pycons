@@ -17,7 +17,7 @@ import os
 import itertools
 
 import numpy as np
-import cv2
+import cv2  # only for IO
 
 
 ROOT_DIR = 'data'
@@ -283,30 +283,61 @@ class Build3D:
             self.num_images = len(mask_fpaths)
             self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
-    def find_cube_side(self, cam_idx=[1, 2]):
-        tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
+    def find_cube_side(self):
+        # tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
 
+        cam_idx = [1, 2]
+        tracking_points_all = np.array([[[137, 55], [137, 100], [102, 127],
+                                         [71, 104], [60, 58], [96, 71],
+                                         [103, 47], [137, 79], [98, 99]],
+                                        [[134, 61], [133, 95], [125, 113],
+                                         [86, 109], [81, 68], [125, 70],
+                                         [101, 58], [134, 79], [125, 91]]])
         i = 0
-        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 0, 0), (255, 255, 255)]
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255),
+                  (0, 0, 0), (255, 255, 255), (255, 255, 0),
+                  (255, 0, 255), (0, 255, 255), (128, 128, 255)]
+        ims = []
         for j in cam_idx:
             im = self.views[j].im.copy()
             for k in range(tracking_points_all[i].shape[0]):
                 x, y = tracking_points_all[i][k].astype(np.int)
                 cv2.drawMarker(im, (int(x), int(y)), colors[k], markerSize=5)
+                cv2.putText(im, str(k), (int(x), int(y)), cv2.FONT_HERSHEY_SIMPLEX, .5, colors[k], thickness=1)
             i += 1
-            cv2.imwrite(str(j) + '.png', im)
-        top_bottom_xyzs = []
+            ims.append(im)
+            # cv2.imwrite(str(j) + '.png', im)
+        mapped_xyzs = []
+        mapped_enus = []
         errs = []
         for i in range(tracking_points_all.shape[1]):
             xyz, enu, err = self.extract_3d_points(tracking_points_all[:, i], [self.views[j].cam for j in cam_idx])
-            top_bottom_xyzs.append(xyz)
+            mapped_xyzs.append(xyz)
+            mapped_enus.append(enu)
             errs.append(err)
             for k in range(len(cam_idx)):
-                im = self.views[cam_idx[k]].cam.viz_plane(100, 2)
-                cv2.imwrite(str(cam_idx[k]) + '-en_plane.png', im)
-        top_bottom_xyzs = np.array(top_bottom_xyzs)
-        side_len = np.linalg.norm(top_bottom_xyzs[0] - top_bottom_xyzs[1])
-        return side_len, top_bottom_xyzs
+                im_ = self.views[cam_idx[k]].cam.viz_plane(200, 1)
+                im = (.5 * ims[k] + .5 * im_).astype(np.uint8)
+                cv2.imwrite(str(cam_idx[k]) + '-en_overlay.png', im)
+        mapped_xyzs = np.array(mapped_xyzs)
+        mapped_enus = np.array(mapped_enus)
+        side_lens = np.linalg.norm(mapped_xyzs[1:] - mapped_xyzs[:-1], axis=1)
+        side_len = np.mean(side_lens[[0, 1, 2, 3, 4, 7]])
+        side_len_uncertainity = side_lens.std()
+        top_center_enu_estimates = np.vstack([mapped_enus[[4, 0]].mean(axis=0), mapped_enus[[5, 6]].mean(axis=0)])
+        top_center_enu = top_center_enu_estimates.mean(axis=0)
+        bottom_center_enu = mapped_enus[[1, 3]].mean(axis=0)
+        top_bottom_centroid_enu = np.mean([top_center_enu, bottom_center_enu], axis=0)
+        corner_centroid_enu_estimates = np.array([np.mean(mapped_enus[[0, 3]], axis=0),
+                                                  np.mean(mapped_enus[[2, 6]], axis=0),
+                                                  np.mean(mapped_enus[[1, 4]], axis=0)])
+        centroid_enu = np.vstack([top_bottom_centroid_enu, corner_centroid_enu_estimates]).mean(axis=0)
+        corner_vertices = mapped_enus[:7]
+        centroid_corner_dists = np.linalg.norm(corner_vertices - centroid_enu, axis=1)
+        centroid_estimation_uncertainity = centroid_corner_dists.std()
+
+        return side_len, centroid_enu, corner_vertices, mapped_enus,\
+               centroid_estimation_uncertainity, side_len_uncertainity
 
     def extract_3d_points(self, im_uvs, cams):
         num_views = len(cams)
@@ -355,8 +386,8 @@ def gen_cube_enus(side=15, center_enu=[0, 0, 0]):
 
 
 #  up-down, pitch, yaw, roll
-def animate_plane(plane_idx=0, rand=True, qidx=0, w=2*640, h=2*360, start_quaternion=[0., 1., 0., 0.],
-                  start_enu=[1, -50, -.5]):
+def animate_plane(plane_idx=1, rand=True, qidx=0, w=2*640, h=2*360, start_quaternion=[0., 1., 0., 0.],
+                  start_enu=[1, -50, 1]):
     cam = Camera(start_enu, w, h, start_quaternion)
     start_quaternion = np.array(start_quaternion)
     viz_points = gen_cube_enus()
@@ -400,7 +431,7 @@ def animate_plane(plane_idx=0, rand=True, qidx=0, w=2*640, h=2*360, start_quater
             q = q + np.random.uniform(low=-.01, high=.01, size=4)
             q = q / np.linalg.norm(q)
             # enu = enu + np.random.uniform(low=0, high=1, size=3)
-            enu = enu + [np.random.uniform(-.1, .1), np.random.uniform(.0, .1), np.random.uniform(0, .05)]
+            enu = enu + [np.random.uniform(-.1, .1), np.random.uniform(.0, .6), np.random.uniform(0, .2)]
 
 
 if __name__ == '__main__':
@@ -415,14 +446,12 @@ if __name__ == '__main__':
     build3d = Build3D(im_fpaths, mask_fpaths, pose_fpaths)
     build3d.viz_en_planes()
 
-    cube_side, top_bottom_xyzs = build3d.find_cube_side([1, 2])
-    print('Cube side is', cube_side)
-
-    cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
-    print('Cube side is', cube_side)
-
-    cube_side, top_bottom_xyzs = build3d.find_cube_side([5, 9])
-    print('Cube side is', cube_side)
+    side_len, centroid_enu, corner_vertices, mapped_enus, \
+    centroid_estimation_uncertainity, side_len_uncertainity = build3d.find_cube_side()
+    print('Cube side Length:', side_len)
+    print('Centroid ENU coordinates:', centroid_enu)
+    print('Centroid estimation uncertainty:', centroid_estimation_uncertainity)
+    print('Side length estimation uncertainty:', side_len_uncertainity)
 
     # targ_enu = np.array([[-10, 20, 9]])
     targ_enu = np.array([[-1, 20, 1]])
