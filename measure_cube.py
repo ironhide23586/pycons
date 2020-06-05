@@ -112,20 +112,21 @@ class Camera:
         xs = xs[f]
         ys = ys[f]
         chosen_world_enus = chosen_world_enus[f]
-        pixels = 1 / np.linalg.norm(chosen_world_enus, axis=1)**2
-        pixels = pixels - pixels.min()
-        pixels = pixels / pixels.max()
-        pixels = (pixels * .3) + .7
-        pixels = (np.tile(np.array([pixels]).T, [1, 3]) * np.array([255, 255, 255])).astype(np.uint8)
         im = np.zeros([self.im_h, self.im_w, 3]).astype(np.uint8)
-        im[ys, xs] = pixels
-        if self.im_w < 500:
-            write_coords = False
-        text_scale = .4
-        if write_coords:
-            for i in range(chosen_world_enus.shape[0]):
-                cv2.putText(im, ','.join(list(map(str, chosen_world_enus[i]))), (int(xs[i]), int(ys[i])),
-                            cv2.FONT_HERSHEY_SIMPLEX, text_scale, [123, 156, 80], thickness=1)
+        if chosen_world_enus.shape[0] > 0:
+            pixels = 1 / np.linalg.norm(chosen_world_enus, axis=1)**2
+            pixels = pixels - pixels.min()
+            pixels = pixels / pixels.max()
+            pixels = (pixels * .3) + .7
+            pixels = (np.tile(np.array([pixels]).T, [1, 3]) * np.array([255, 255, 255])).astype(np.uint8)
+            im[ys, xs] = pixels
+            if self.im_w < 500:
+                write_coords = False
+            text_scale = .4
+            if write_coords:
+                for i in range(chosen_world_enus.shape[0]):
+                    cv2.putText(im, ','.join(list(map(str, chosen_world_enus[i]))), (int(xs[i]), int(ys[i])),
+                                cv2.FONT_HERSHEY_SIMPLEX, text_scale, [123, 156, 80], thickness=1)
         steps = 10000
         e_enus = np.zeros([steps, 3])
         e_enus[:, 0] = np.linspace(0, 100, steps)
@@ -135,25 +136,28 @@ class Camera:
         u_enus[:, 2] = np.linspace(0, 100, steps)
 
         xys, _, _ = self.project_enus_to_imcoords(e_enus, self.RT)
-        xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
-        xs = xs[f]
-        ys = ys[f]
-        im[ys, xs] = [0, 255, 0]
+        if xys.shape[0] > 0:
+            xs, ys = xys.T
+            f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
+            xs = xs[f]
+            ys = ys[f]
+            im[ys, xs] = [0, 255, 0]
 
         xys, _, _ = self.project_enus_to_imcoords(n_enus, self.RT)
-        xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
-        xs = xs[f]
-        ys = ys[f]
-        im[ys, xs] = [255, 0, 0]
+        if xys.shape[0] > 0:
+            xs, ys = xys.T
+            f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
+            xs = xs[f]
+            ys = ys[f]
+            im[ys, xs] = [255, 0, 0]
 
         xys, _, _ = self.project_enus_to_imcoords(u_enus, self.RT)
-        xs, ys = xys.T
-        f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
-        xs = xs[f]
-        ys = ys[f]
-        im[ys, xs] = [0, 0, 255]
+        if xys.shape[0] > 0:
+            xs, ys = xys.T
+            f = np.logical_and(np.logical_and(xs >= 0, xs < self.im_w), np.logical_and(ys >= 0, ys < self.im_h))
+            xs = xs[f]
+            ys = ys[f]
+            im[ys, xs] = [0, 0, 255]
 
         return im, chosen_points_filt
 
@@ -327,28 +331,40 @@ def vec2zeromat(xy):
                      [-y, x,  0]])
 
 #  up-down, pitch, yaw, roll
-def animate_plane(plane_idx=2, qidx=3, w=640, h=360, start_quaternion=[1., 0.1, 0., 0.1], start_enu=[0, 0, 0]):
+def animate_plane(plane_idx=2, rand=True, qidx=3, w=640, h=360, start_quaternion=[1., 0., 0., 0.], start_enu=[0, 0, 0]):
     cam = Camera(start_enu, w, h, start_quaternion)
-    qvals0 = np.linspace(-1., 1., 100)
-    qvals1 = np.linspace(1., -1., 100)
     start_quaternion = np.array(start_quaternion)
-    while True:
-        for qval in qvals0:
-            q = start_quaternion.copy()
-            q[qidx] = qval
-            cam.update_cam_loc_pose(start_enu, q)
-            print(qval)
+    if not rand:
+        qvals0 = np.linspace(-1., 1., 1000)
+        qvals1 = np.linspace(1., -1., 1000)
+        while True:
+            for qval in qvals0:
+                q = start_quaternion.copy()
+                q[qidx] = qval
+                cam.update_cam_loc_pose(start_enu, q)
+                print(qval)
+                im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
+                cv2.imshow('plane_render', im)
+                cv2.waitKey(1)
+            for qval in qvals1:
+                q = start_quaternion.copy()
+                q[qidx] = qval
+                cam.update_cam_loc_pose(start_enu, q)
+                print(qval)
+                im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
+                cv2.imshow('plane_render', im)
+                cv2.waitKey(1)
+    else:
+        q = start_quaternion.copy()
+        enu = np.array(start_enu)
+        while True:
+            cam.update_cam_loc_pose(enu, q)
             im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
             cv2.imshow('plane_render', im)
             cv2.waitKey(1)
-        for qval in qvals1:
-            q = start_quaternion.copy()
-            q[qidx] = qval
-            cam.update_cam_loc_pose(start_enu, q)
-            print(qval)
-            im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
-            cv2.imshow('plane_render', im)
-            cv2.waitKey(1)
+            q = q + np.random.uniform(low=-.1, high=.1, size=4)
+            enu = enu + np.random.uniform(low=0, high=1, size=3)
+            # enu = enu + [0, 1, 0]
 
 
 if __name__ == '__main__':
@@ -371,7 +387,6 @@ if __name__ == '__main__':
 
     cube_side, top_bottom_xyzs = build3d.find_cube_side([5, 9])
     print('Cube side is', cube_side)
-
 
     # targ_enu = np.array([[-10, 20, 9]])
     targ_enu = np.array([[-1, 20, 1]])
