@@ -330,10 +330,31 @@ def vec2zeromat(xy):
                      [1,  0, -x],
                      [-y, x,  0]])
 
+
+def gen_sphere_enus(radius=15, center_enu=[0, 0, 0]):
+    p = np.linspace(-radius, radius, 100)
+    enus = np.array(list(itertools.product(p, p, p)))
+    ds = np.linalg.norm(enus, axis=1)
+    enus = enus[ds <= radius]
+    c = np.tile(np.array([center_enu]), [enus.shape[0], 1])
+    enus = enus + c
+    return enus
+
+
+def gen_cube_enus(side=15, center_enu=[0, 0, 0]):
+    p = np.linspace(-side / 2, side / 2, 20)
+    enus = np.array(list(itertools.product(p, p, p)))
+    c = np.tile(np.array([center_enu]), [enus.shape[0], 1])
+    enus = enus + c
+    return enus
+
+
 #  up-down, pitch, yaw, roll
-def animate_plane(plane_idx=2, rand=True, qidx=3, w=640, h=360, start_quaternion=[1., 0., 0., 0.], start_enu=[0, 0, 0]):
+def animate_plane(plane_idx=2, rand=True, qidx=3, w=2*640, h=2*360, start_quaternion=[1., 0., 0., 0.],
+                  start_enu=[1, -50, -.5]):
     cam = Camera(start_enu, w, h, start_quaternion)
     start_quaternion = np.array(start_quaternion)
+    viz_points = gen_cube_enus()
     if not rand:
         qvals0 = np.linspace(-1., 1., 1000)
         qvals1 = np.linspace(1., -1., 1000)
@@ -360,11 +381,17 @@ def animate_plane(plane_idx=2, rand=True, qidx=3, w=640, h=360, start_quaternion
         while True:
             cam.update_cam_loc_pose(enu, q)
             im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
+            im_uvs, _, _ = cam.project_enus_to_imcoords(viz_points, cam.RT)
+            xs, ys = im_uvs.T
+            f = np.logical_and(np.logical_and(xs >= 0, xs < w), np.logical_and(ys >= 0, ys < h))
+            xs = xs[f]
+            ys = ys[f]
+            im[ys, xs] = [250, 169, 201]
             cv2.imshow('plane_render', im)
             cv2.waitKey(1)
-            q = q + np.random.uniform(low=-.1, high=.1, size=4)
-            enu = enu + np.random.uniform(low=0, high=1, size=3)
-            # enu = enu + [0, 1, 0]
+            q = q + np.random.uniform(low=-.01, high=.01, size=4)
+            # enu = enu + np.random.uniform(low=0, high=1, size=3)
+            enu = enu + [np.random.uniform(-.1, .1), np.random.uniform(.0, .1), np.random.uniform(0, .05)]
 
 
 if __name__ == '__main__':
