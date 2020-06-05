@@ -52,11 +52,14 @@ class Camera:
         K[1, 2] = (im_h / 2.)
         return K
 
-    def get_cam_rot_trans_matrix(self, cam_world_loc_xyz, cam_quaternion):
-        a, b, c, d = cam_quaternion
-        rotation_matrix = np.array([[2 * a ** 2 - 1 + 2 * b ** 2,       2 * b * c + 2 * a * d,        2 * b * d - 2 * a * c],
-                                    [2 * b * c - 2 * a * d,       2 * a ** 2 - 1 + 2 * c ** 2,        2 * c * d + 2 * a * b],
-                                    [2 * b * d + 2 * a * c,             2 * c * d - 2 * a * b,  2 * a ** 2 - 1 + 2 * d ** 2]])
+    def get_cam_rot_trans_matrix(self, cam_world_loc_xyz, cam_quaternion_ned):
+        a, b, c, d = cam_quaternion_ned
+        # rotation_matrix = np.array([[2 * a ** 2 - 1 + 2 * b ** 2,       2 * b * c + 2 * a * d,        2 * b * d - 2 * a * c],
+        #                             [2 * b * c - 2 * a * d,       2 * a ** 2 - 1 + 2 * c ** 2,        2 * c * d + 2 * a * b],
+        #                             [2 * b * d + 2 * a * c,             2 * c * d - 2 * a * b,  2 * a ** 2 - 1 + 2 * d ** 2]])
+        rotation_matrix = np.array([[2 * b * c - 2 * a * d, 2 * a ** 2 - 1 + 2 * c ** 2, 2 * c * d + 2 * a * b],
+                                    [2 * b * d + 2 * a * c, 2 * c * d - 2 * a * b, 2 * a ** 2 - 1 + 2 * d ** 2],
+                                    [2 * a ** 2 - 1 + 2 * b ** 2, 2 * b * c + 2 * a * d, 2 * b * d - 2 * a * c]])
         x, y, z = cam_world_loc_xyz
         translation_vector = np.array([-x, -y, -z])
         rotation_translation_matrix = np.eye(4)[:3]
@@ -205,7 +208,10 @@ class View:
     def read_pose_loc(self, d):
         line2num = lambda i: float(d[i].replace('}', '').strip().split(':')[-1].split(',')[0].strip())
         q = np.array([line2num(i) for i in range(4)])
-        xyz = np.array([line2num(i) for i in range(4, 7)])
+        q = q / np.linalg.norm(q)
+        # q = np.array([1, 0, 0, 0])
+        n, e, d = np.array([line2num(i) for i in range(4, 7)])
+        xyz = np.array([e, d, n])
         return q, xyz
 
     def init(self, loc_xyz=None, quaternion=None):
@@ -289,7 +295,6 @@ class Build3D:
                 cv2.drawMarker(im, (int(x), int(y)), colors[k], markerSize=5)
             i += 1
             cv2.imwrite(str(j) + '.png', im)
-
         top_bottom_xyzs = []
         errs = []
         for i in range(tracking_points_all.shape[1]):
@@ -319,7 +324,7 @@ class Build3D:
 
     def viz_en_planes(self):
         for view in self.views:
-            im = view.cam.viz_plane(100, 2)
+            im = view.cam.viz_plane(100, 1)
             im = (.5 * im + .5 * view.im).astype(np.uint8)
             cv2.imwrite('misc/' + view.id + '_en-plane.png', im)
 
@@ -350,18 +355,20 @@ def gen_cube_enus(side=15, center_enu=[0, 0, 0]):
 
 
 #  up-down, pitch, yaw, roll
-def animate_plane(plane_idx=2, rand=True, qidx=3, w=2*640, h=2*360, start_quaternion=[1., 0., 0., 0.],
+def animate_plane(plane_idx=0, rand=True, qidx=0, w=2*640, h=2*360, start_quaternion=[0., 1., 0., 0.],
                   start_enu=[1, -50, -.5]):
     cam = Camera(start_enu, w, h, start_quaternion)
     start_quaternion = np.array(start_quaternion)
     viz_points = gen_cube_enus()
     if not rand:
-        qvals0 = np.linspace(-1., 1., 1000)
-        qvals1 = np.linspace(1., -1., 1000)
+        # start_enu = [0, 0, 0]
+        qvals0 = np.linspace(-1, 1., 10000)
+        qvals1 = np.linspace(1., -1., 10000)
         while True:
             for qval in qvals0:
                 q = start_quaternion.copy()
                 q[qidx] = qval
+                q = q / np.linalg.norm(q)
                 cam.update_cam_loc_pose(start_enu, q)
                 print(qval)
                 im = cam.viz_plane(100, plane_idx, -1, write_coords=False)
@@ -377,6 +384,7 @@ def animate_plane(plane_idx=2, rand=True, qidx=3, w=2*640, h=2*360, start_quater
                 cv2.waitKey(1)
     else:
         q = start_quaternion.copy()
+        q = q / np.linalg.norm(q)
         enu = np.array(start_enu)
         while True:
             cam.update_cam_loc_pose(enu, q)
@@ -390,12 +398,13 @@ def animate_plane(plane_idx=2, rand=True, qidx=3, w=2*640, h=2*360, start_quater
             cv2.imshow('plane_render', im)
             cv2.waitKey(1)
             q = q + np.random.uniform(low=-.01, high=.01, size=4)
+            q = q / np.linalg.norm(q)
             # enu = enu + np.random.uniform(low=0, high=1, size=3)
             enu = enu + [np.random.uniform(-.1, .1), np.random.uniform(.0, .1), np.random.uniform(0, .05)]
 
 
 if __name__ == '__main__':
-    animate_plane()
+    # animate_plane()
 
     im_fpaths = np.array(glob(IMAGE_DIR + os.sep + '*'))
     ids = [n.split(os.sep)[-1].split('_')[0] for n in im_fpaths]
