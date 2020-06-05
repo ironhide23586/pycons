@@ -266,18 +266,26 @@ class Build3D:
             self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
     def find_cube_side(self, cam_idx=[1, 2]):
-        tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
-
+        # tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
+        tracking_points_all = np.array([[[137, 55], [137, 100], [102, 127],
+                                         [71, 104], [60, 58], [96, 71],
+                                         [103, 47], [137, 79], [98, 99]],
+                                        [[134, 61], [133, 95], [125, 113],
+                                         [86, 109], [81, 68], [125, 70],
+                                         [101, 58], [134, 79], [125, 91]]])
         i = 0
-        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 0, 0), (255, 255, 255)]
+        colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255),
+                  (0, 0, 0), (255, 255, 255), (255, 255, 0),
+                  (255, 0, 255), (0, 255, 255), (128, 128, 255)]
+        ims = []
         for j in cam_idx:
             im = self.views[j].im.copy()
             for k in range(tracking_points_all[i].shape[0]):
                 x, y = tracking_points_all[i][k].astype(np.int)
                 cv2.drawMarker(im, (int(x), int(y)), colors[k], markerSize=5)
             i += 1
-            cv2.imwrite(str(j) + '.png', im)
-
+            ims.append(im)
+            # cv2.imwrite(str(j) + '.png', im)
         top_bottom_xyzs = []
         errs = []
         for i in range(tracking_points_all.shape[1]):
@@ -285,8 +293,9 @@ class Build3D:
             top_bottom_xyzs.append(xyz)
             errs.append(err)
             for k in range(len(cam_idx)):
-                im = self.views[cam_idx[k]].cam.viz_plane(100, 2)
-                cv2.imwrite(str(cam_idx[k]) + '-en_plane.png', im)
+                im_ = self.views[cam_idx[k]].cam.viz_plane(100, 2)
+                im = (.5 * ims[k] + .5 * im_).astype(np.uint8)
+                cv2.imwrite(str(cam_idx[k]) + '-en_overlay.png', im)
         top_bottom_xyzs = np.array(top_bottom_xyzs)
         side_len = np.linalg.norm(top_bottom_xyzs[0] - top_bottom_xyzs[1])
         return side_len, top_bottom_xyzs
@@ -335,9 +344,8 @@ if __name__ == '__main__':
     # cube_side, top_bottom_xyzs = build3d.find_cube_side([4, 5])
     # print('Cube side is', cube_side)
 
-    cube_side, top_bottom_xyzs = build3d.find_cube_side([5, 9])
-    print('Cube side is', cube_side)
-
+    # cube_side, top_bottom_xyzs = build3d.find_cube_side([5, 9])
+    # print('Cube side is', cube_side)
 
 
     # targ_enu = np.array([[-10, 20, 9]])
