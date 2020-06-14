@@ -284,9 +284,9 @@ class Build3D:
             self.views = [View(im_fpaths[i], mask_fpaths[i], pose_fpaths[i]) for i in range(self.num_images)]
 
     def find_cube_side(self):
+        cam_idx = [1, 2]
         # tracking_points_all = np.array([self.views[j].find_right_top_bottom_tracking_points() for j in cam_idx])
 
-        cam_idx = [1, 2]
         tracking_points_all = np.array([[[137, 55], [137, 100], [102, 127],
                                          [71, 104], [60, 58], [96, 71],
                                          [103, 47], [137, 79], [98, 99]],
@@ -354,6 +354,8 @@ class Build3D:
         return xyz, enu, err
 
     def viz_en_planes(self):
+        if not os.path.isdir('misc'):
+            os.makedirs('misc')
         for view in self.views:
             im = view.cam.viz_plane(100, 1)
             im = (.5 * im + .5 * view.im).astype(np.uint8)
